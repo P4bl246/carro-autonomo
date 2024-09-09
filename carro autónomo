@@ -1,0 +1,238 @@
+#include "I2Cdev.h"
+#include "MPU6050.h"
+#include "Wire.h"
+#include "BluetoothSerial.h"
+// Inicialización del sensor MPU6050
+MPU6050 sensor;
+int en1 = 26; // avanzar
+int en2 = 14; // retroceder
+int en3 = 27; // retroceder
+int en4 = 12; // avanzar
+int echo = 15;
+int trig = 19;
+BluetoothSerial SerialBT;
+// Variables para almacenar los valores del giroscopio
+int16_t gx, gy, gz;
+
+// Variables para el cálculo del desplazamiento
+float Z2 = 0;  // Posición actual en el eje Z
+float velocidad = 0.5; // Velocidad en m/s
+float Y = 0; // Posición en el eje Y (en centímetros)
+float X = 0; // Posición en el eje X (en centímetros)
+float referenciaZ = 0; // Posición de referencia (cero)
+unsigned long tiempoAnterior = 0; // Variable para almacenar el tiempo anterior
+const long intervalo = 20; // Intervalo en milisegundos (20 ms)
+struct Punto {
+    float x;
+    float y;
+};
+
+typedef struct  {
+    Punto puntos[10]; // Máximo de 10 puntos en la ruta
+    int numPuntos;
+}Ruta;
+
+void recibirRuta() {
+    if (SerialBT.available()) {
+        Ruta ruta;
+        ruta.numPuntos = SerialBT.parseInt(); // Lee el número de puntos
+        for (int i = 0; i < ruta.numPuntos; i++) {
+            ruta.puntos[i].x = SerialBT.parseFloat(); // Lee la coordenada X
+            ruta.puntos[i].y = SerialBT.parseFloat(); // Lee la coordenada Y
+        }
+        // Procesar la ruta recibida
+        seguirRuta(ruta);
+    }
+}
+
+void seguirRuta(Ruta ruta) {
+    for (int i = 0; i < ruta.numPuntos; i++) {
+        float xDestino = ruta.puntos[i].x;
+        float yDestino = ruta.puntos[i].y;
+
+        // Mover el carro hacia el punto de destino
+        while (abs(X - xDestino) >= 1 || abs(Y - yDestino) >= 1) {
+            if (Y < yDestino) {
+                analogWrite(en1, 124); // Avanza
+                analogWrite(en4, 124);
+            } else if (Y > yDestino) {
+                analogWrite(en2, 124); // Retrocede
+                analogWrite(en3, 124);
+            }
+            
+            if (X < xDestino) {
+                analogWrite(en4, 124); // Avanza
+                analogWrite(en2, 0);
+            } else if (X > xDestino) {
+                analogWrite(en1, 124); // Retrocede
+                analogWrite(en3, 0);
+            }
+            
+            planoCartesiano(); // Actualiza la posición
+        }
+        
+        // Detener el carro cuando llegue al punto de destino
+        analogWrite(en1, 0);
+        analogWrite(en2, 0);
+        analogWrite(en3, 0);
+        analogWrite(en4, 0);
+    }
+}
+
+void calcularDistancia() {
+    // Leer las velocidades angulares del giroscopio
+    sensor.getRotation(&gx, &gy, &gz);
+    
+    // Convertir la lectura a grados por segundo
+    float gz_deg_s = gz / 131.0;  // El factor de escala para obtener grados/s
+
+    // Calcular el tiempo transcurrido desde la última lectura
+    static unsigned long lastTime = millis();
+    unsigned long currentTime = millis();
+    float deltaTime = (currentTime - lastTime) / 1000.0; // Convertir a segundos
+    lastTime = currentTime;
+
+    // Calcular la diferencia angular en función de la velocidad angular
+    float deltaTheta = gz_deg_s * deltaTime; // Diferencia angular en grados
+
+    // Actualizar Z2 solo si hay un movimiento significativo
+    if (abs(deltaTheta) > 0.5) { // Umbral para considerar un movimiento significativo
+        Z2 += deltaTheta; // Acumular el ángulo actual
+    }
+
+    // Imprimir la posición actual en el eje Z
+    Serial.print("Posición Z actual: ");
+    Serial.print(Z2);
+    Serial.println(" grados");
+    SerialBT.print("Posición Z actual: ");
+    SerialBT.print(Z2);
+    SerialBT.println(" grados");
+}
+
+void planoCartesiano() {
+    unsigned long tiempoActual = millis(); // Obtiene el tiempo actual
+
+    // Verifica si los motores están en marcha hacia adelante
+    if (analogRead(en1) > 10 && analogRead(en4) > 10) {
+        // Verifica si ha pasado el intervalo de 20 ms
+        if (tiempoActual - tiempoAnterior >= intervalo) {
+            tiempoAnterior = tiempoActual; // Actualiza el tiempo anterior
+
+            // Incrementa Y por 1 cm (0.5 m/s * 20 ms = 1 cm)
+            Y += 1;
+
+            // Imprime la distancia recorrida
+            Serial.print("Distancia recorrida (Y): ");
+            Serial.print(Y);
+            Serial.println(" cm");
+            SerialBT.print("Distancia recorrida (Y): ");
+            SerialBT.print(Y);
+            SerialBT.println(" cm");
+        }
+    }
+
+    // Verifica si los motores están en marcha hacia atrás
+    if (analogRead(en2) > 120 && analogRead(en3) > 120) {
+        // Verifica si ha pasado el intervalo de 20 ms
+        if (tiempoActual - tiempoAnterior >= intervalo) {
+            tiempoAnterior = tiempoActual; // Actualiza el tiempo anterior
+
+            // Decrementa Y por 1 cm
+            Y -= 1;
+
+            // Imprime la distancia recorrida
+            Serial.print("Distancia recorrida (Y): ");
+            Serial.print(Y);
+            Serial.println(" cm");
+            SerialBT.print("Distancia recorrida (Y): ");
+            SerialBT.print(Y);
+            SerialBT.println(" cm");
+        }
+    }
+
+    // Calcular la distancia basada en la rotación en el eje Z
+    calcularDistancia(); // Llama a la función para calcular la distancia
+
+    // Comprobación de la rotación en el eje Z
+    if (Z2 > 0 && Z2 < 180 && analogRead(en1) > 120 && analogRead(en4) > 120) { // Si el ángulo está entre 0 y 360 grados
+        X += 1; // Incrementa X
+        Serial.print("Rotación Z: Incrementando X: ");Serial.println(X);
+         SerialBT.print("Rotación Z: Incrementando X: ");Serial.println(X);
+    } else if (Z2 >= -1 && Z2 < -180 && analogRead(en2) > 120 && analogRead(en3)> 120) { // Si el ángulo está entre -1 y -180 grados
+        X -= 1; // Decrementa X
+        Serial.print("Rotación Z: Decrementando X: "); Serial.println(X);
+        SerialBT.print("Rotación Z: Decrementando X: "); Serial.println(X);
+    }
+}
+// Función que controla el movimiento del vehículo en función de la distancia
+bool movimiento(int distancia) {
+    // Verifica si hay datos disponibles en el puerto Bluetooth
+            
+        if (distancia > 10 && distancia < 400) {
+
+            Serial.print("distancia: ");
+            Serial.print(distancia);
+            Serial.println(" cm");
+             SerialBT.print("distancia: ");
+            SerialBT.print(distancia);
+            SerialBT.println(" cm");
+            
+            return true;
+        } else {
+            // Detener si la distancia es menor o igual a 10 cm
+            return false;
+        }
+}
+ 
+void setup() {
+    Serial.begin(9600);
+ SerialBT.begin("ESP32-Bluetooth"); // Nombre del dispositivo Bluetooth
+    // Inicialización del sensor MPU6050
+    Wire.begin();           // Iniciando I2C  
+    sensor.initialize();    // Iniciando el sensor
+
+    if (sensor.testConnection()) {
+        Serial.println("Sensor iniciado correctamente");
+          SerialBT.println("Sensor iniciado correctamente");
+        sensor.getRotation(&gx, &gy, &gz);
+        // Inicializar la posición de referencia a cero
+        referenciaZ = 0; // Establecer la posición de referencia en 0
+        Z2 = referenciaZ; // Inicializar Z2 con la posición de referencia
+    } else {
+        Serial.println("Error al iniciar el sensor");
+        SerialBT.println("Error al iniciar el sensor");
+    }
+
+    // Puente H ------------------------------------------------------------------------
+    analogWrite(en1, 0);
+    analogWrite(en2, 0);
+    analogWrite(en3, 0);
+    analogWrite(en4, 0);
+    pinMode(trig, OUTPUT);
+    pinMode(echo, INPUT);
+    digitalWrite(trig, LOW);
+    digitalWrite(echo, LOW);
+}
+
+void loop() {
+  
+    digitalWrite(trig, HIGH);
+    delay(2);
+    digitalWrite(trig, LOW);
+
+    int tiempo = pulseIn(echo, HIGH);
+    int distancia = (tiempo * 0.034) / 2;
+
+    // Llamar a la función movimiento con la distancia medida
+    if (!movimiento(distancia)) {
+        Serial.print("\n");
+        Serial.print("detenido");
+        SerialBT.print("\n");
+        SerialBT.print("detenido");
+    } else {
+        calcularDistancia();
+    }
+    
+    planoCartesiano(); // Llama a la función de plano cartesiano
+    recibirRuta();
+}
