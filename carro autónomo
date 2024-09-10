@@ -4,6 +4,8 @@
 #include "BluetoothSerial.h"
 // Inicialización del sensor MPU6050
 MPU6050 sensor;
+int enA = 25;
+int enB = 33;
 int en1 = 26; // avanzar
 int en2 = 14; // retroceder
 int en3 = 27; // retroceder
@@ -53,29 +55,29 @@ void seguirRuta(Ruta ruta) {
         // Mover el carro hacia el punto de destino
         while (abs(X - xDestino) >= 1 || abs(Y - yDestino) >= 1) {
             if (Y < yDestino) {
-                analogWrite(en1, 124); // Avanza
-                analogWrite(en4, 124);
+                digitalWrite(en1, HIGH); // Avanza
+                digitalWrite(en4, HIGH);
             } else if (Y > yDestino) {
-                analogWrite(en2, 124); // Retrocede
-                analogWrite(en3, 124);
+                digitalWrite(en2, HIGH); // Retrocede
+                digitalWrite(en3, HIGH);
             }
             
             if (X < xDestino) {
-                analogWrite(en4, 124); // Avanza
-                analogWrite(en2, 0);
+                digitalWrite(en4, HIGH); // Avanza
+                digitalWrite(en2, LOW);
             } else if (X > xDestino) {
-                analogWrite(en1, 124); // Retrocede
-                analogWrite(en3, 0);
+                digitalWrite(en1, HIGH); // Retrocede
+                digitalWrite(en3, LOW);
             }
             
             planoCartesiano(); // Actualiza la posición
         }
         
         // Detener el carro cuando llegue al punto de destino
-        analogWrite(en1, 0);
-        analogWrite(en2, 0);
-        analogWrite(en3, 0);
-        analogWrite(en4, 0);
+        digitalWrite(en1, LOW);
+        digitalWrite(en2, LOW);
+        digitalWrite(en3, LOW);
+        digitalWrite(en4, LOW);
     }
 }
 
@@ -113,7 +115,7 @@ void planoCartesiano() {
     unsigned long tiempoActual = millis(); // Obtiene el tiempo actual
 
     // Verifica si los motores están en marcha hacia adelante
-    if (analogRead(en1) > 10 && analogRead(en4) > 10) {
+    if (digitalRead(en1) > 0 && digitalRead(en4) > 0) {
         // Verifica si ha pasado el intervalo de 20 ms
         if (tiempoActual - tiempoAnterior >= intervalo) {
             tiempoAnterior = tiempoActual; // Actualiza el tiempo anterior
@@ -132,7 +134,7 @@ void planoCartesiano() {
     }
 
     // Verifica si los motores están en marcha hacia atrás
-    if (analogRead(en2) > 120 && analogRead(en3) > 120) {
+    if (digitalRead(en2) >0  && digitalRead(en3) > 0) {
         // Verifica si ha pasado el intervalo de 20 ms
         if (tiempoActual - tiempoAnterior >= intervalo) {
             tiempoAnterior = tiempoActual; // Actualiza el tiempo anterior
@@ -154,11 +156,11 @@ void planoCartesiano() {
     calcularDistancia(); // Llama a la función para calcular la distancia
 
     // Comprobación de la rotación en el eje Z
-    if (Z2 > 0 && Z2 < 180 && analogRead(en1) > 120 && analogRead(en4) > 120) { // Si el ángulo está entre 0 y 360 grados
+    if (Z2 > 0 && Z2 < 180 && digitalRead(en1) > 0 && digitalRead(en4) > 0) { // Si el ángulo está entre 0 y 360 grados
         X += 1; // Incrementa X
         Serial.print("Rotación Z: Incrementando X: ");Serial.println(X);
          SerialBT.print("Rotación Z: Incrementando X: ");Serial.println(X);
-    } else if (Z2 >= -1 && Z2 < -180 && analogRead(en2) > 120 && analogRead(en3)> 120) { // Si el ángulo está entre -1 y -180 grados
+    } else if (Z2 >= -1 && Z2 < -180 && digitalRead(en2) > 0 && digitalRead(en3)> 0) { // Si el ángulo está entre -1 y -180 grados
         X -= 1; // Decrementa X
         Serial.print("Rotación Z: Decrementando X: "); Serial.println(X);
         SerialBT.print("Rotación Z: Decrementando X: "); Serial.println(X);
@@ -168,7 +170,7 @@ void planoCartesiano() {
 bool movimiento(int distancia) {
     // Verifica si hay datos disponibles en el puerto Bluetooth
             
-        if (distancia > 10 && distancia < 400) {
+        if (distancia > 20 && distancia < 400) {
 
             Serial.print("distancia: ");
             Serial.print(distancia);
@@ -204,10 +206,17 @@ void setup() {
     }
 
     // Puente H ------------------------------------------------------------------------
-    analogWrite(en1, 0);
-    analogWrite(en2, 0);
-    analogWrite(en3, 0);
-    analogWrite(en4, 0);
+    analogWrite(enA, 0);
+    analogWrite(enB, 0);
+    pinMode(en1, OUTPUT);
+    pinMode(en2, OUTPUT);
+    pinMode(en3, OUTPUT);
+    pinMode(en4, OUTPUT);
+    digitalWrite(en1, LOW);
+    digitalWrite(en2, LOW);
+    digitalWrite(en3, LOW);
+    digitalWrite(en4, LOW);
+  
     pinMode(trig, OUTPUT);
     pinMode(echo, INPUT);
     digitalWrite(trig, LOW);
@@ -215,7 +224,6 @@ void setup() {
 }
 
 void loop() {
-  
     digitalWrite(trig, HIGH);
     delay(2);
     digitalWrite(trig, LOW);
@@ -232,7 +240,8 @@ void loop() {
     } else {
         calcularDistancia();
     }
-    
+                Serial.print("en2: ");Serial.println(digitalRead(en2));
+
     planoCartesiano(); // Llama a la función de plano cartesiano
     recibirRuta();
 }
