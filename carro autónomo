@@ -2,246 +2,277 @@
 #include "MPU6050.h"
 #include "Wire.h"
 #include "BluetoothSerial.h"
-// Inicialización del sensor MPU6050
-MPU6050 sensor;
-int enA = 25;
-int enB = 33;
+#include "math.h"
+
 int en1 = 26; // avanzar
 int en2 = 14; // retroceder
 int en3 = 27; // retroceder
 int en4 = 12; // avanzar
+
+BluetoothSerial SerialBT;
+
+// Variables para el sensor ultrasonico
 int echo = 15;
 int trig = 19;
-BluetoothSerial SerialBT;
-// Variables para almacenar los valores del giroscopio
+
+// Variables para medir distancia
+int tiempo;
+int distancia;
+
+bool verificarDistancia() {
+    digitalWrite(trig, HIGH);
+    delay(10);
+    digitalWrite(trig, LOW);
+    tiempo = pulseIn(echo, HIGH);
+    distancia = (tiempo * 0.034) / 2;
+    Serial.print("Distancia: ");
+    Serial.println(distancia);
+    SerialBT.print("Distancia: ");
+    SerialBT.println(distancia);
+    return (distancia > 20 && distancia < 400);
+}
+
+// Variables para el MPU6050
+MPU6050 sensor;
 int16_t gx, gy, gz;
 
-// Variables para el cálculo del desplazamiento
-float Z2 = 0;  // Posición actual en el eje Z
-float velocidad = 0.5; // Velocidad en m/s
-float Y = 0; // Posición en el eje Y (en centímetros)
-float X = 0; // Posición en el eje X (en centímetros)
-float referenciaZ = 0; // Posición de referencia (cero)
-unsigned long tiempoAnterior = 0; // Variable para almacenar el tiempo anterior
-const long intervalo = 20; // Intervalo en milisegundos (20 ms)
-struct Punto {
-    float x;
-    float y;
-};
+// Inicialización de la posición del carro
+float posicionX = 0.0;
+float Z2 = 0.0; // Posición actual en el eje Z
+//temporizador para tomar datos en base a el timpo 
+unsigned long inicio;  // Tiempo de inicio
+bool timpoIniciado= false; // Estado del temporizador
+float velocidad = 0.5;
+int seconds = 0;
+bool timpoIniciado2= false; // Estado del temporizador
 
-typedef struct  {
-    Punto puntos[10]; // Máximo de 10 puntos en la ruta
-    int numPuntos;
-}Ruta;
+
+bool posicion() {
+    sensor.getRotation(&gx, &gy, &gz);
+    float gz_deg = (gz * 180) / 3.14159; // El factor de escala para obtener grados
+
+    if (gz_deg < -1.0) {
+        Z2 -= gz_deg;
+    } else if (gz_deg > 1.0) {
+        Z2 += gz_deg;
+    } else {
+        Z2 = 0.0;
+    }
+
+    // Primera condición: en1 y en4 activos
+    if (digitalRead(en1) > 0 && digitalRead(en4) > 0 && !timpoIniciado) {
+        inicio = millis(); 
+        timpoIniciado = true;
+    }
+
+    // Lógica para el temporizador
+    if (timpoIniciado) {
+        unsigned long tiempoTranscurrido = millis() - inicio;
+        unsigned long intervalos = millis() - inicio; // Corrige 'incio' a 'inicio'
+        
+        if (intervalos >= 1000) { // Cambia a >= para evitar problemas de sincronización
+            int segundos = intervalos / 1000;
+            velocidad -= 0.000350;
+            intervalos = millis() - inicio; // Reinicia el intervalo
+        }
+        
+        seconds += tiempoTranscurrido / 1000; // Convierte a segundos
+    }
+    
+    // Segunda condición: en2 y en3 activos
+    else if (digitalRead(en3) > 0 && digitalRead(en2) > 0 && !timpoIniciado2) {
+        inicio = millis(); 
+        timpoIniciado2 = true;
+    }
+
+    // Lógica para el segundo temporizador
+    if (timpoIniciado2) {
+        unsigned long tiempoTranscurrido2 = millis() - inicio;
+        unsigned long intervalos2 = millis() - inicio; // Corrige 'incio' a 'inicio'
+        
+        if (intervalos2 >= 1000) { // Cambia a >= para evitar problemas de sincronización
+            int segundos = intervalos2 / 1000;
+            velocidad -= 0.000350;
+            intervalos2 = millis() - inicio; // Reinicia el intervalo
+        }
+        
+        seconds += tiempoTranscurrido2 / 1000; // Convierte a segundos
+    }
+
+    Serial.print("Tiempo transcurrido: ");
+    Serial.print(seconds);
+    Serial.println(" segundos");
+
+    float distancia = velocidad * seconds;
+
+    // Modificar posicionX para ser negativa si se activa en2 y en3
+    if (digitalRead(en3) > 0 && digitalRead(en2) > 0) {
+        posicionX = -distancia; // Hacer que la posición X sea negativa
+    } else {
+        posicionX = distancia; // Mantener la posición X positiva para otras condiciones
+    }
+
+    // Imprimir la posición actual en el eje Z y X
+    Serial.print("Posición Z actual: ");
+    Serial.print(Z2);
+    Serial.print(" grados");
+    Serial.print(" gz: "); Serial.println(gz);
+    Serial.print("gz_deg: "); Serial.println(gz_deg);
+    
+    Serial.print(" Posición X actual: ");
+    Serial.print(posicionX);
+    Serial.println(" m");
+
+    SerialBT.print(" Posición Z actual: ");
+    SerialBT.print(Z2);
+    SerialBT.print(" grados");
+    
+    SerialBT.print(" Posición X actual: ");
+    SerialBT.print(posicionX);
+    SerialBT.println(" m");
+}
+
+// Estructura para almacenar puntos
+typedef struct {
+    float x;
+    float z;
+} Punto;
+
+Punto puntos[4]; // Máximo de 4 puntos
+int numPuntos = 0; // Contador de puntos válidos
+
+bool seHanRecibidoCoordenadas = false;
 
 void recibirRuta() {
-    if (SerialBT.available()) {
-        Ruta ruta;
-        ruta.numPuntos = SerialBT.parseInt(); // Lee el número de puntos
-        for (int i = 0; i < ruta.numPuntos; i++) {
-            ruta.puntos[i].x = SerialBT.parseFloat(); // Lee la coordenada X
-            ruta.puntos[i].y = SerialBT.parseFloat(); // Lee la coordenada Y
+    if (SerialBT.available() > 0) {
+        numPuntos = 0; // Resetear contador al recibir nueva ruta
+        
+        for (int i = 0; i < 4; i++) {
+            float tempX = SerialBT.parseFloat();
+            float tempZ = SerialBT.parseFloat();
+            
+            if (tempX != 0.0 || tempZ != 0.0 || numPuntos == 0) { // Permitir que la primera coordenada sea (0,0)
+                puntos[numPuntos].x = tempX;
+                puntos[numPuntos].z = tempZ;
+                numPuntos++;
+            
+                if (numPuntos > 0) {
+                    seHanRecibidoCoordenadas = true; // Indicar que se han recibido coordenadas
+                    Serial.println("Coordenadas recibidas.");
+                    Serial.print("Coordenada X: ");Serial.print(puntos[numPuntos - 1].x);
+                    Serial.print(" Coordenada Z: ");Serial.println(puntos[numPuntos - 1].z);
+                    SerialBT.println("Coordenadas recibidas.");
+                    SerialBT.print("Coordenada X: ");SerialBT.print(puntos[numPuntos - 1].x);
+                    SerialBT.print(" Coordenada Z: ");SerialBT.println(puntos[numPuntos - 1].z);
+                }
+            }
         }
-        // Procesar la ruta recibida
-        seguirRuta(ruta);
     }
 }
 
-void seguirRuta(Ruta ruta) {
-    for (int i = 0; i < ruta.numPuntos; i++) {
-        float xDestino = ruta.puntos[i].x;
-        float yDestino = ruta.puntos[i].y;
+void seguirRuta(float rotacionZ, float desplazamientoX) {
+    posicion();
 
-        // Mover el carro hacia el punto de destino
-        while (abs(X - xDestino) >= 1 || abs(Y - yDestino) >= 1) {
-            if (Y < yDestino) {
-                digitalWrite(en1, HIGH); // Avanza
-                digitalWrite(en4, HIGH);
-            } else if (Y > yDestino) {
-                digitalWrite(en2, HIGH); // Retrocede
-                digitalWrite(en3, HIGH);
-            }
-            
-            if (X < xDestino) {
-                digitalWrite(en4, HIGH); // Avanza
-                digitalWrite(en2, LOW);
-            } else if (X > xDestino) {
-                digitalWrite(en1, HIGH); // Retrocede
-                digitalWrite(en3, LOW);
-            }
-            
-            planoCartesiano(); // Actualiza la posición
-        }
-        
-        // Detener el carro cuando llegue al punto de destino
+    // Verificar si la distancia es adecuada
+    if (!verificarDistancia()) {
+        Serial.println("Distancia fuera del rango permitido. Deteniendo el robot.");
+        // Detener motores
         digitalWrite(en1, LOW);
         digitalWrite(en2, LOW);
         digitalWrite(en3, LOW);
         digitalWrite(en4, LOW);
+        return; // Salir de la función si la distancia no es adecuada
     }
+     
+    if(Z2 != rotacionZ){
+      if(rotacionZ <= -1.0){
+            digitalWrite(en2, HIGH);
+            digitalWrite(en4, HIGH);
+    } 
+    else if(rotacionZ >= 1.0){
+      digitalWrite(en1, HIGH);
+      digitalWrite(en3, HIGH);
+    }
+    else{
+      digitalWrite(en1, LOW);
+        digitalWrite(en2, LOW);
+        digitalWrite(en3, LOW);
+        digitalWrite(en4, LOW);
+    }
+    }
+    delay(10);
+    if(posicionX != desplazamientoX){
+      if(desplazamientoX <= -1.0){
+        digitalWrite(en2, HIGH);
+        digitalWrite(en3, HIGH);
+      }
+      else if(desplazamientoX >= 1.0){
+        digitalWrite(en1, HIGH);
+        digitalWrite(en4, HIGH);
+      }
+      else{
+        digitalWrite(en1, LOW);
+        digitalWrite(en2, LOW);
+        digitalWrite(en3, LOW);
+        digitalWrite(en4, LOW);
+      }
+    }
+    delay(10);
+
 }
 
-void calcularDistancia() {
-    // Leer las velocidades angulares del giroscopio
-    sensor.getRotation(&gx, &gy, &gz);
-    
-    // Convertir la lectura a grados por segundo
-    float gz_deg_s = gz / 131.0;  // El factor de escala para obtener grados/s
-
-    // Calcular el tiempo transcurrido desde la última lectura
-    static unsigned long lastTime = millis();
-    unsigned long currentTime = millis();
-    float deltaTime = (currentTime - lastTime) / 1000.0; // Convertir a segundos
-    lastTime = currentTime;
-
-    // Calcular la diferencia angular en función de la velocidad angular
-    float deltaTheta = gz_deg_s * deltaTime; // Diferencia angular en grados
-
-    // Actualizar Z2 solo si hay un movimiento significativo
-    if (abs(deltaTheta) > 0.5) { // Umbral para considerar un movimiento significativo
-        Z2 += deltaTheta; // Acumular el ángulo actual
-    }
-
-    // Imprimir la posición actual en el eje Z
-    Serial.print("Posición Z actual: ");
-    Serial.print(Z2);
-    Serial.println(" grados");
-    SerialBT.print("Posición Z actual: ");
-    SerialBT.print(Z2);
-    SerialBT.println(" grados");
-}
-
-void planoCartesiano() {
-    unsigned long tiempoActual = millis(); // Obtiene el tiempo actual
-
-    // Verifica si los motores están en marcha hacia adelante
-    if (digitalRead(en1) > 0 && digitalRead(en4) > 0) {
-        // Verifica si ha pasado el intervalo de 20 ms
-        if (tiempoActual - tiempoAnterior >= intervalo) {
-            tiempoAnterior = tiempoActual; // Actualiza el tiempo anterior
-
-            // Incrementa Y por 1 cm (0.5 m/s * 20 ms = 1 cm)
-            Y += 1;
-
-            // Imprime la distancia recorrida
-            Serial.print("Distancia recorrida (Y): ");
-            Serial.print(Y);
-            Serial.println(" cm");
-            SerialBT.print("Distancia recorrida (Y): ");
-            SerialBT.print(Y);
-            SerialBT.println(" cm");
-        }
-    }
-
-    // Verifica si los motores están en marcha hacia atrás
-    if (digitalRead(en2) >0  && digitalRead(en3) > 0) {
-        // Verifica si ha pasado el intervalo de 20 ms
-        if (tiempoActual - tiempoAnterior >= intervalo) {
-            tiempoAnterior = tiempoActual; // Actualiza el tiempo anterior
-
-            // Decrementa Y por 1 cm
-            Y -= 1;
-
-            // Imprime la distancia recorrida
-            Serial.print("Distancia recorrida (Y): ");
-            Serial.print(Y);
-            Serial.println(" cm");
-            SerialBT.print("Distancia recorrida (Y): ");
-            SerialBT.print(Y);
-            SerialBT.println(" cm");
-        }
-    }
-
-    // Calcular la distancia basada en la rotación en el eje Z
-    calcularDistancia(); // Llama a la función para calcular la distancia
-
-    // Comprobación de la rotación en el eje Z
-    if (Z2 > 0 && Z2 < 180 && digitalRead(en1) > 0 && digitalRead(en4) > 0) { // Si el ángulo está entre 0 y 360 grados
-        X += 1; // Incrementa X
-        Serial.print("Rotación Z: Incrementando X: ");Serial.println(X);
-         SerialBT.print("Rotación Z: Incrementando X: ");Serial.println(X);
-    } else if (Z2 >= -1 && Z2 < -180 && digitalRead(en2) > 0 && digitalRead(en3)> 0) { // Si el ángulo está entre -1 y -180 grados
-        X -= 1; // Decrementa X
-        Serial.print("Rotación Z: Decrementando X: "); Serial.println(X);
-        SerialBT.print("Rotación Z: Decrementando X: "); Serial.println(X);
-    }
-}
-// Función que controla el movimiento del vehículo en función de la distancia
-bool movimiento(int distancia) {
-    // Verifica si hay datos disponibles en el puerto Bluetooth
-            
-        if (distancia > 20 && distancia < 400) {
-
-            Serial.print("distancia: ");
-            Serial.print(distancia);
-            Serial.println(" cm");
-             SerialBT.print("distancia: ");
-            SerialBT.print(distancia);
-            SerialBT.println(" cm");
-            
-            return true;
-        } else {
-            // Detener si la distancia es menor o igual a 10 cm
-            return false;
-        }
-}
- 
 void setup() {
     Serial.begin(9600);
- SerialBT.begin("ESP32-Bluetooth"); // Nombre del dispositivo Bluetooth
-    // Inicialización del sensor MPU6050
-    Wire.begin();           // Iniciando I2C  
-    sensor.initialize();    // Iniciando el sensor
-
+    SerialBT.begin("ESP32");
+    Wire.begin();
+    
+    sensor.initialize();
+    
     if (sensor.testConnection()) {
         Serial.println("Sensor iniciado correctamente");
-          SerialBT.println("Sensor iniciado correctamente");
-        sensor.getRotation(&gx, &gy, &gz);
-        // Inicializar la posición de referencia a cero
-        referenciaZ = 0; // Establecer la posición de referencia en 0
-        Z2 = referenciaZ; // Inicializar Z2 con la posición de referencia
+        sensor.getRotation(&gy,&gx,&gz);
     } else {
         Serial.println("Error al iniciar el sensor");
-        SerialBT.println("Error al iniciar el sensor");
     }
 
-    // Puente H ------------------------------------------------------------------------
-    analogWrite(enA, 0);
-    analogWrite(enB, 0);
     pinMode(en1, OUTPUT);
     pinMode(en2, OUTPUT);
     pinMode(en3, OUTPUT);
     pinMode(en4, OUTPUT);
+    digitalWrite(en1, 124);
+    digitalWrite(en2, 124);
+    digitalWrite(en3, 124);
+    digitalWrite(en4, 124);
+
+    pinMode(trig, OUTPUT);
+    pinMode(echo, INPUT);
+
+    // Detener motores si no hay desplazamiento
     digitalWrite(en1, LOW);
     digitalWrite(en2, LOW);
     digitalWrite(en3, LOW);
-    digitalWrite(en4, LOW);
-  
-    pinMode(trig, OUTPUT);
-    pinMode(echo, INPUT);
-    digitalWrite(trig, LOW);
-    digitalWrite(echo, LOW);
+    digitalWrite(en4, LOW); 
 }
 
-void loop() {
-    digitalWrite(trig, HIGH);
-    delay(2);
-    digitalWrite(trig, LOW);
 
-    int tiempo = pulseIn(echo, HIGH);
-    int distancia = (tiempo * 0.034) / 2;
-
-    // Llamar a la función movimiento con la distancia medida
-    if (!movimiento(distancia)) {
-        Serial.print("\n");
-        Serial.print("detenido");
-        SerialBT.print("\n");
-        SerialBT.print("detenido");
-    } else {
-        calcularDistancia();
-    }
-                Serial.print("en2: ");Serial.println(digitalRead(en2));
-
-    planoCartesiano(); // Llama a la función de plano cartesiano
-    recibirRuta();
+void loop() {    
+  posicion();
+    recibirRuta(); // Comprobar si hay nuevos puntos de ruta
+    
+    if(seHanRecibidoCoordenadas){
+        for (int i = 0; i < numPuntos; i++) {
+            seguirRuta(puntos[i].x - posicionX , puntos[i].z - Z2); // Seguir cada punto de la ruta
+            delay(100); // Esperar un poco antes del siguiente ciclo 
+        }
+   }
 }
+
+
+
+
+
+
+
+
+
+
