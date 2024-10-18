@@ -3,10 +3,13 @@
 #include "Wire.h"
 #include "BluetoothSerial.h"
 
+int ENA = 25;
+int ENB = 1;
 int en1 = 26; // avanzar
 int en2 = 14; // retroceder
 int en3 = 27; // retroceder
 int en4 = 12; // avanzar
+int v = 114;
 
 BluetoothSerial SerialBT;
 //temporizador para tomar datos en base a el timpo 
@@ -101,7 +104,9 @@ void velocidad(float accelY) {
 
     // Actualizar la distancia basada en la velocidad acumulada
     distanceY += velocityY * deltaTime; // Integrar para obtener distancia
-    distanciatotal += velocityY * deltaTime;
+    if(distanceY != 0){
+    distanciatotal += distanceY;
+    }
     // Imprimir los resultados
     Serial.print("Velocidad Y actual: ");
     Serial.print(velocityY);
@@ -206,6 +211,8 @@ void seguirRuta(int rotacionZ, int desplazamientoY) {
         digitalWrite(en2, LOW);
         digitalWrite(en3, LOW);
         digitalWrite(en4, LOW);
+        v += 130;
+        
     }
     delay(1);
 
@@ -230,7 +237,7 @@ void seguirRuta(int rotacionZ, int desplazamientoY) {
                 // Asegurarse de que la velocidad sea 0
         velocityY = 0; 
         distanceY = 0;
-     
+        v -=130;
         delay(1); // Esperar un poco antes de la siguiente lectura
 
       }
@@ -263,9 +270,12 @@ void setup() {
     pinMode(en2, OUTPUT);
     pinMode(en3, OUTPUT);
     pinMode(en4, OUTPUT);
+    pinMode(ENA, OUTPUT);
+    pinMode(ENB, OUTPUT);
    /* pinMode(trig, OUTPUT);
     pinMode(echo, INPUT);*/
-
+    analogWrite(ENA, v);
+    analogWrite(ENB, v);
     // Detener motores si no hay desplazamiento
     digitalWrite(en1, LOW);
     digitalWrite(en2, LOW);
@@ -277,12 +287,9 @@ void setup() {
 void loop() {    
   posicion();
 
-    if (SerialBT.available()) {
+    if (SerialBT.available() && !seHanRecibidoCoordenadas) {
         recibirRuta(); // Comprobar si hay nuevos puntos de ruta
     }
 
-    if (seHanRecibidoCoordenadas) {
-        for (int i = 0; i < numPuntos; i++);
-        seHanRecibidoCoordenadas = false; // Restablecer después de procesar
-    }
+    if(seHanRecibidoCoordenadas);
 }
